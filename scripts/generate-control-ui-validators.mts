@@ -4,6 +4,7 @@ import { build } from "esbuild";
 import { format } from "oxfmt";
 import { ObjectOptions, Type, type TSchema } from "typebox";
 import { Intern } from "typebox/schema";
+import { AgentRuntimeFreshSessionErrorDetailsSchema } from "../packages/gateway-protocol/src/agent-runtime-fresh-session-error-details.js";
 import { AgentRuntimeRestrictionErrorDetailsSchema } from "../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
 import {
   SessionApprovalEventSchema,
@@ -198,6 +199,12 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
     "SessionFileReadMetadata",
     Type.Pick(SessionsFilesGetResultSchema, ["root", "source"]),
     'Pick<import("' + schemaRoot + 'sessions.js").SessionsFilesGetResult, "root" | "source">',
+    "session-input",
+  ],
+  [
+    "AgentRuntimeFreshSessionErrorDetails",
+    AgentRuntimeFreshSessionErrorDetailsSchema,
+    'import("../../../../packages/gateway-protocol/src/agent-runtime-fresh-session-error-details.js").AgentRuntimeFreshSessionErrorDetails',
     "session-input",
   ],
 ];

@@ -1,12 +1,17 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import {
+  answerConfirmDialog,
+  waitForConfirmDialogActions,
+} from "../../test-helpers/modal-dialog.ts";
 import { createActiveSessionPlacement } from "../../test-helpers/session-placement.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
-import { switchChatModel } from "./chat-session.ts";
+import { switchChatModel, type StartFreshWithChatModel } from "./chat-session.ts";
 import { renderChatModelControls } from "./chat-view.test-helpers.ts";
 import type { ChatModelControls } from "./components/chat-model-controls.tsx";
 
@@ -91,14 +96,23 @@ function renderRuntimeModel(
   return renderControls(result, [entry]);
 }
 
-function selectionControls(result: SessionsListResult, models: ModelCatalogEntry[]) {
+function selectionControls(
+  result: SessionsListResult,
+  models: ModelCatalogEntry[],
+  options?: { refusal?: GatewayRequestError; startFresh?: StartFreshWithChatModel },
+) {
   const host = makeChatHost({
     sessionKey: "main",
     sessionsResult: result,
     chatModelCatalog: models,
     chatModelSwitchPromises: {},
     requestHandlers: {
-      "sessions.patch": { ok: true, key: "main", path: "", entry: { sessionId: "main" } },
+      "sessions.patch": () => {
+        if (options?.refusal) {
+          throw options.refusal;
+        }
+        return { ok: true, key: "main", path: "", entry: { sessionId: "main" } };
+      },
       "sessions.list": result,
     },
   });
@@ -111,7 +125,7 @@ function selectionControls(result: SessionsListResult, models: ModelCatalogEntry
       models,
       {
         onModelSelect: (value, key, runtime) => {
-          selection = switchChatModel(host, value, key, runtime);
+          selection = switchChatModel(host, value, key, runtime, undefined, options?.startFresh);
           return selection;
         },
       },
@@ -125,7 +139,7 @@ function selectionControls(result: SessionsListResult, models: ModelCatalogEntry
     row,
     select: async (button: HTMLButtonElement) => {
       button.click();
-      await selection;
+      return selection;
     },
     patches: () => requestCalls(host.request, "sessions.patch"),
   };
@@ -385,4 +399,74 @@ it("retains model controls when inference credentials belong to the worker", asy
   expect(container.querySelector("[data-chat-model-select]")?.textContent).toContain("GPT-5.6 Sol");
   expect(container.querySelector(solSelector)).not.toBeNull();
   expect(container.querySelector(".chat-controls__effort-picker")).not.toBeNull();
+});
+
+it.each(["cancel", "confirm"] as const)(
+  "handles a non-committing runtime refusal from the model picker (%s)",
+  async (choice) => {
+    const result = sessionsFor(model);
+    Object.assign(result.sessions[0]!, {
+      sessionId: "main",
+      hasMessages: true,
+      agentRuntime: { id: "codex", source: "session-key" },
+      modelOverrideSource: "user",
+    });
+    const startFresh = vi.fn<StartFreshWithChatModel>().mockResolvedValue(true);
+    const refusal = new GatewayRequestError({
+      code: "INVALID_REQUEST",
+      message: "Start a fresh session.",
+      details: {
+        code: "AGENT_RUNTIME_REQUIRES_FRESH_SESSION",
+        sessionId: "main",
+        runtimeId: "openclaw",
+        model: "openai/gpt-5.6-sol",
+      },
+    });
+    const { host, draw, row, select, patches } = selectionControls(result, [model], {
+      refusal,
+      startFresh,
+    });
+    host.chatMessages = [{ role: "user", content: "Synthetic prior conversation" }];
+    await draw();
+    const switching = select(row('[data-chat-model-runtime="openclaw"]'));
+    const actions = await waitForConfirmDialogActions();
+    expect(actions.textContent).toContain("Start fresh");
+    expect(patches()).toHaveLength(1);
+    expect(startFresh).not.toHaveBeenCalled();
+    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+    answerConfirmDialog(actions, choice);
+    await expect(switching).resolves.toBe(false);
+    expect(patches()).toHaveLength(1);
+    expect(host.sessions.state.modelOverrides).toEqual({});
+    expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+    if (choice === "confirm") {
+      expect(startFresh).toHaveBeenCalledExactlyOnceWith(
+        { model: "openai/gpt-5.6-sol", agentRuntime: "openclaw" },
+        { signal: expect.any(AbortSignal), isCurrent: expect.any(Function) },
+      );
+    } else {
+      expect(startFresh).not.toHaveBeenCalled();
+    }
+  },
+);
+
+it("changes runtime without a warning when the Gateway accepts a fresh session", async () => {
+  const result = sessionsFor(model);
+  Object.assign(result.sessions[0]!, {
+    sessionId: "main",
+    hasMessages: false,
+    agentRuntime: model.agentRuntime,
+    modelOverrideSource: "user",
+  });
+  const startFresh = vi.fn<StartFreshWithChatModel>();
+  const { host, draw, row, select } = selectionControls(result, [model], { startFresh });
+  await draw();
+  await expect(select(row(codexSelector))).resolves.toBe(true);
+  expectPatch(host, {
+    model: "openai/gpt-5.6-sol",
+    agentRuntime: "codex",
+    expectedSessionId: "main",
+  });
+  expect(startFresh).not.toHaveBeenCalled();
+  expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
 });

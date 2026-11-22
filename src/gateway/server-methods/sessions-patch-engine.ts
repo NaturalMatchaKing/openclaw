@@ -10,6 +10,7 @@ import { isInternalSessionEffectsKey } from "../../config/sessions/internal-sess
 import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-equality.js";
 import type { SessionEntryCanonicalReplacement } from "../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { SessionLabelOwnerIndex } from "../../config/sessions/session-entry-selection.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import type { UserModelAccountSelection } from "../model-account-authority.js";
@@ -471,6 +472,30 @@ export async function executeSessionPatchMutations(params: {
                           patch: target.fullPatch,
                           entry: projected.entry,
                           expectedEntry: existingEntry,
+                          hasUncoveredCodexCompaction:
+                            existingEntry && !isIncognitoSessionKey(primaryKey)
+                              ? async () => {
+                                  const { readSessionTranscriptModelContextInWorker } =
+                                    await import("../../config/sessions/session-transcript-read-worker-runtime.js");
+                                  storage?.assertCurrent();
+                                  const context = await readSessionTranscriptModelContextInWorker(
+                                    {
+                                      agentId: target.targetAgentId,
+                                      sessionId: existingEntry.sessionId,
+                                      sessionKey: primaryKey,
+                                      storePath: target.storePath,
+                                    },
+                                    undefined,
+                                    params.signal,
+                                    undefined,
+                                    undefined,
+                                    undefined,
+                                    true,
+                                  );
+                                  storage?.assertCurrent();
+                                  return context.uncoveredCodexCompaction === true;
+                                }
+                              : undefined,
                           callerCanConsent: callerIsAdmin,
                           operatorAuthority,
                           catalog: (await catalogs.available(target.targetAgentId))?.entries,

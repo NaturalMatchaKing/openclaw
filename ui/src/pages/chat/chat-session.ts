@@ -78,6 +78,11 @@ export type ChatModelSettingsHost = ChatSessionRefreshHost & {
   sessionsResultAgentId?: string | null;
 };
 
+export type StartFreshWithChatModel = (
+  selection: { model: string; agentRuntime: string },
+  ownership: { signal: AbortSignal; isCurrent: () => boolean },
+) => Promise<boolean>;
+
 const modelSelectionOwners = new WeakMap<object, AbortController>();
 
 export function cancelChatModelRecovery(host: object): void {
@@ -350,6 +355,7 @@ export async function switchChatModel(
   targetSessionKey = host.sessionKey,
   agentRuntime?: string | null,
   agentDefaultModel?: string,
+  startFresh?: StartFreshWithChatModel,
 ): Promise<boolean> {
   if (!host.client || !host.connected) {
     return false;
@@ -467,6 +473,7 @@ export async function switchChatModel(
           nextModel,
           runtimeSelection,
           selection,
+          startFresh,
         );
       } catch (error) {
         if (ownsSelection()) {

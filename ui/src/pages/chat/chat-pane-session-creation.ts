@@ -1,3 +1,4 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { pathForPluginSettings } from "../../app-route-paths.ts";
 import { isArchiveHeld, undoHeldArchive } from "../../components/session-archive-hold.ts";
@@ -240,7 +241,10 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     });
   }
 
-  protected readonly createSession = async (harnessUpdateSummary?: string): Promise<boolean> => {
+  protected readonly createSession = async (
+    harnessUpdateSummary?: string,
+    fresh?: { model: string; agentRuntime: string; signal: AbortSignal; isCurrent: () => boolean },
+  ): Promise<boolean> => {
     const state = this.state;
     if (
       !state ||
@@ -256,22 +260,28 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const client = state.client;
     const previousSessionKey = state.sessionKey;
     const expiredIncognito = isExpiredIncognitoSession(state);
+    const incognito =
+      expiredIncognito || (fresh !== undefined && isIncognitoSessionKey(previousSessionKey));
     const preservesBoard =
-      harnessUpdateSummary === undefined && !expiredIncognito && this.resolveBoardView().hasBoard;
+      !fresh &&
+      harnessUpdateSummary === undefined &&
+      !expiredIncognito &&
+      this.resolveBoardView().hasBoard;
+    const modelSelection = fresh ? { model: fresh.model, agentRuntime: fresh.agentRuntime } : {};
     const createParams = {
-      ...(expiredIncognito
-        ? { incognito: true as const }
-        : { currentSessionKey: previousSessionKey }),
+      ...(incognito ? { incognito: true as const } : { currentSessionKey: previousSessionKey }),
+      ...modelSelection,
       agentId:
         scopedAgentParamsForSession(state, previousSessionKey).agentId ??
         resolveAgentIdFromSessionKey(previousSessionKey),
     };
     const createRequestParams = {
       ...resolveSessionCreateParams(
-        expiredIncognito ? undefined : previousSessionKey,
+        incognito ? undefined : previousSessionKey,
         createParams.agentId,
       ),
-      ...(expiredIncognito ? { incognito: true } : {}),
+      ...(incognito ? { incognito: true } : {}),
+      ...modelSelection,
     };
     const readCreateAccess = () =>
       readSessionMethodAccess(context.gateway.snapshot, {
@@ -282,7 +292,9 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       });
     const scope = { context, state, client, generation: this.connectionGeneration };
     const isCurrent = () =>
-      this.isConnectionScopeCurrent(scope) && this.context.sessions === sessions;
+      this.isConnectionScopeCurrent(scope) &&
+      this.context.sessions === sessions &&
+      (fresh?.isCurrent() ?? true);
     if (!canCreateChatSession(state)) {
       setChatError(state, t("chat.sendErrors.newSessionBusy"));
       return false;
@@ -296,9 +308,10 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       setChatError(state, initialAccess.reason);
       return false;
     }
-    this.sessionCreation.creatingIncognito = expiredIncognito;
+    this.sessionCreation.creatingIncognito = incognito;
     this.sessionCreation.creatingHarnessUpdate = harnessUpdateSummary !== undefined;
-    const signal = this.headerSessionMutationAbortController.signal;
+    const headerSignal = this.headerSessionMutationAbortController.signal;
+    const signal = fresh ? AbortSignal.any([headerSignal, fresh.signal]) : headerSignal;
     try {
       const { createCapturedChatSession, createHarnessUpdateSession } =
         await import("./chat-pane-session-operations.runtime.ts");
@@ -348,7 +361,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         signal,
         isCurrent,
         paneId: this.paneId,
-        confirmReset: () => this.confirmConversationReset(),
+        confirmReset: () => (fresh ? Promise.resolve(true) : this.confirmConversationReset()),
         onSessionChange: (key) => this.onPaneSessionChange?.(this.paneId, key),
       });
     } catch (error) {

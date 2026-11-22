@@ -49,6 +49,7 @@ var External = [
     /^.*$/u,
     /(^changeId$|^voiceSessionId$|^sessionKey$|^voice$|^phase$)/u,
     /(^workspaceId$|^root$|^fileRoot$)/u,
+    /(^code$|^sessionId$|^runtimeId$|^model$)/u,
   ],
   check_0 = (value) => check_1(value),
   check_1 = (value) =>
@@ -351,6 +352,24 @@ var External = [
     check_4(value.workspaceId) &&
     check_24(value.root) &&
     check_24(value.fileRoot),
+  check_81 = (value) => check_82(value),
+  check_82 = (value) =>
+    typeof value == "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    "code" in value &&
+    "sessionId" in value &&
+    "runtimeId" in value &&
+    "model" in value &&
+    Object.getOwnPropertyNames(value).every(
+      (unique_27, unique_28) => External[13].test(unique_27) || check_2(value[unique_27]),
+    ) &&
+    check_83(value.code) &&
+    check_4(value.sessionId) &&
+    check_4(value.runtimeId) &&
+    check_4(value.model),
+  check_83 = (value) =>
+    typeof value == "string" && value === "AGENT_RUNTIME_REQUIRES_FRESH_SESSION",
   isAgentRuntimeRestrictionErrorDetails = (value) => check_0(value),
   isSessionsGoalUpdateParams = (value) => check_25(value),
   isSessionsGoalClearParams = (value) => check_42(value),
@@ -363,8 +382,10 @@ var External = [
   isSessionPermissionMode = (value) => check_66(value),
   isSessionToolOverrides = (value) => check_67(value),
   isTalkVoiceChangeEvent = (value) => check_73(value),
-  isSessionFileReadMetadata = (value) => check_78(value);
+  isSessionFileReadMetadata = (value) => check_78(value),
+  isAgentRuntimeFreshSessionErrorDetails = (value) => check_81(value);
 export {
+  isAgentRuntimeFreshSessionErrorDetails,
   isAgentRuntimeRestrictionErrorDetails,
   isSessionCyberAccessProgram,
   isSessionDeviceFolder,

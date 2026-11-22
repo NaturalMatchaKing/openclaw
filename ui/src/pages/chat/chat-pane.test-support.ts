@@ -116,7 +116,7 @@ export type TestChatPane = HTMLElement &
     continueCatalogSession: ChatPaneRuntime["continueCatalogSession"];
     forkFromMessage: (entryId: string) => Promise<void>;
     retireHeaderSessionMutations: () => void;
-    createSession: () => Promise<boolean>;
+    createSession: ChatPaneRuntime["createSession"];
     restoreArchivedSession: (sessionKey: string, expectedSessionId: string) => Promise<void>;
     resolveTaskSuggestion: ChatPaneRuntime["resolveTaskSuggestion"];
     copyTaskSuggestionPrompt: ChatPaneRuntime["copyTaskSuggestionPrompt"];

@@ -1,3 +1,4 @@
+export * from "./agent-runtime-fresh-session-error-details.js";
 export * from "./agent-runtime-restriction-error-details.js";
 export * from "./capability-consent-error-details.js";
 export * from "./clawhub-trust-error-details.js";

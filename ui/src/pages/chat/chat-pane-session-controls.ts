@@ -20,7 +20,11 @@ import { projectChatFields } from "./chat-field-projection.ts";
 import { getAcceptedChatHistorySession, isChatSessionProvenAbsent } from "./chat-history-state.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
-import { switchChatModel, switchChatSetting } from "./chat-session.ts";
+import {
+  switchChatModel,
+  switchChatSetting,
+  type StartFreshWithChatModel,
+} from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -161,6 +165,7 @@ export function renderChatPaneComposerControls(params: {
   permissionAccess: SessionMethodAccess;
   canSelectFull: boolean;
   onModelSetup: () => void;
+  onStartFreshWithModel?: StartFreshWithChatModel;
   onProviderSettings?: (provider: string) => void;
   onModelAccounts?: () => void;
 }): {
@@ -180,6 +185,7 @@ export function renderChatPaneComposerControls(params: {
     permissionAccess,
     canSelectFull,
     onModelSetup,
+    onStartFreshWithModel,
     onProviderSettings,
     onModelAccounts,
   } = params;
@@ -302,7 +308,14 @@ export function renderChatPaneComposerControls(params: {
             ownsSelection: () => ownsSelection() && state.chatAccountSelection === accountSelection,
             onSelect: (account) =>
               modelAccess.allowed && canPatch({ model: `${accountModel}@${account.authProfileId}` })
-                ? switchChatModel(state, `${accountModel}@${account.authProfileId}`, sessionKey)
+                ? switchChatModel(
+                    state,
+                    `${accountModel}@${account.authProfileId}`,
+                    sessionKey,
+                    undefined,
+                    undefined,
+                    onStartFreshWithModel,
+                  )
                 : Promise.resolve(false),
             onManage: onModelAccounts,
           }),
@@ -396,7 +409,14 @@ export function renderChatPaneComposerControls(params: {
         },
         onModelSelect: (next, targetSessionKey, agentRuntime) =>
           modelAccess.allowed && canPatch({ model: next, agentRuntime }, targetSessionKey)
-            ? switchChatModel(state, next, targetSessionKey, agentRuntime, agentDefaultModel)
+            ? switchChatModel(
+                state,
+                next,
+                targetSessionKey,
+                agentRuntime,
+                agentDefaultModel,
+                onStartFreshWithModel,
+              )
             : Promise.resolve(false),
         onThinkingSelect: (next, targetSessionKey) =>
           effortAccess.allowed && canPatch({ thinkingLevel: next }, targetSessionKey)
