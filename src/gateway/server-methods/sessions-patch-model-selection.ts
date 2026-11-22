@@ -2,6 +2,7 @@ import type { AgentRuntimeRestrictionErrorDetails } from "../../../packages/gate
 import {
   ErrorCodes,
   errorShape,
+  type AgentRuntimeFreshSessionErrorDetails,
   type ErrorShape,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -32,7 +33,10 @@ import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model
 import { prepareSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
-import { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
+import {
+  findSelectedCatalogEntry,
+  prepareModelSelectionRuntime,
+} from "../../auto-reply/reply/model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "../../auto-reply/reply/queue.js";
 import { hasRememberedNativeRuntimeConsent } from "../../config/native-runtime-consent.js";
 import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
@@ -333,6 +337,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   /** Creation admits inherited defaults even when no selection fields were supplied. */
   validateInheritedRuntime?: boolean;
   expectedEntry?: SessionEntry;
+  hasUncoveredCodexCompaction?: () => Promise<boolean>;
   hydrateThinkingCatalog?: boolean;
   prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   validateModelSelection?: () => ErrorShape | undefined;
@@ -351,6 +356,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   }
   let validateRuntime: (() => string | undefined) | undefined;
   let selectedHarness: AgentHarness | undefined;
+  let preparedRuntimeId: string | undefined;
   let readSelectedHarness = () => selectedHarness;
   let validateEnvironment: (() => ErrorShape | undefined) | undefined;
   let releaseEnvironment: (() => void) | undefined;
@@ -422,6 +428,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
         return invalid(choice.message);
       }
       selectedHarness = choice.harness;
+      preparedRuntimeId = choice.runtime.kind === "set" ? choice.runtime.runtime : undefined;
       const policyError = resolveAgentHarnessOperatorPolicyError(
         selectedHarness,
         params.operatorAuthority,
@@ -515,6 +522,51 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     if (error) {
       release();
       return { ok: false, error };
+    }
+    if (
+      model &&
+      params.expectedEntry &&
+      params.hasUncoveredCodexCompaction &&
+      (params.patch.agentRuntime !== undefined || params.patch.model !== undefined)
+    ) {
+      const resolveRuntime = (ref: ModelRef, entry: SessionEntry) => {
+        const catalogEntry = findSelectedCatalogEntry({ ...ref, catalog: params.catalog });
+        return resolveEffectiveAgentRuntime({
+          cfg: params.cfg,
+          agentId: params.agentId,
+          sessionKey: params.placement?.sessionKey ?? params.patch.key,
+          provider: ref.provider,
+          modelId: ref.model,
+          modelApi: catalogEntry?.api,
+          modelBaseUrl: catalogEntry?.baseUrl,
+          sessionEntry: entry,
+          mode: "execution",
+        });
+      };
+      const destination = preparedRuntimeId ?? resolveRuntime(model, params.entry);
+      const sourceModel = resolveSessionModelRef(params.cfg, params.expectedEntry, params.agentId);
+      if (
+        destination === "openclaw" &&
+        sourceModel &&
+        resolveRuntime(sourceModel, params.expectedEntry) !== destination &&
+        (await params.hasUncoveredCodexCompaction())
+      ) {
+        const details: AgentRuntimeFreshSessionErrorDetails = {
+          code: "AGENT_RUNTIME_REQUIRES_FRESH_SESSION",
+          sessionId: params.expectedEntry.sessionId,
+          runtimeId: destination,
+          model: `${model.provider}/${model.model}`,
+        };
+        release();
+        return {
+          ok: false,
+          error: errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "This conversation has no portable Codex compaction summary. Continue with the current runtime or start a fresh session.",
+            { details },
+          ),
+        };
+      }
     }
     return {
       ok: true,

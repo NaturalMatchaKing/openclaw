@@ -112,7 +112,10 @@ function createTestPane(
     theme,
     connectionBootstrap,
     sessions,
-    gateway: { snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() } },
+    gateway: {
+      connection: { gatewayUrl: "ws://fixture.invalid" },
+      snapshot: { client, phase: "connected", hello: sessionMutationGatewayHello() },
+    },
   } as unknown as ApplicationContext;
   // SAFETY: The test host forwards the protected Board controller contract to its runtime.
   const pane = createPaneTestHost(
@@ -127,6 +130,8 @@ function createTestPane(
     ...createInitialChatRealtimeState(),
     chatError: null,
     chatLoading: false,
+    chatAttachments: [],
+    chatMessage: "",
     chatHistoryPagination: { hasMore: false },
     chatMessages: [],
     chatMessagesBySession: new Map(),
@@ -494,6 +499,31 @@ describe("chat pane board shell", () => {
     await expect(pending).resolves.toBe(true);
     expect(reset).toHaveBeenCalledWith("agent:main:current", {});
     expect(sessions.create).not.toHaveBeenCalled();
+  });
+
+  it("starts a fresh conversation with the selected runtime instead of resetting its source board", async () => {
+    const { pane, sessions, reset } = resetPane();
+    const changeSession = vi.fn();
+    pane.onPaneSessionChange = changeSession;
+
+    const created = await pane.createSession(undefined, {
+      model: "fixture/selected",
+      agentRuntime: "openclaw",
+      signal: new AbortController().signal,
+      isCurrent: () => true,
+    });
+    expect(created, pane.state.chatError ?? undefined).toBe(true);
+    expect(sessions.create).toHaveBeenCalledExactlyOnceWith(
+      {
+        currentSessionKey: "agent:main:current",
+        agentId: "main",
+        model: "fixture/selected",
+        agentRuntime: "openclaw",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(changeSession).toHaveBeenCalledWith(pane.paneId, "agent:main:new");
+    expect(reset).not.toHaveBeenCalled();
   });
 
   it("rechecks reset scope after board confirmation", async () => {

@@ -198,8 +198,8 @@ export function createSessionPatchGroupWriter(params: {
       update: (entries) => {
         // Archive removal belongs to maintenance; only restore prepares a checkout here.
         const needsExternalPreparation =
-          typeof patch.agentRuntime === "string" ||
-          typeof patch.model === "string" ||
+          patch.agentRuntime !== undefined ||
+          patch.model !== undefined ||
           typeof patch.nativeRuntimeConsent === "string" ||
           (patch.archived === false &&
             entries.some(({ sessionKey, entry }) => targetKeys.has(sessionKey) && entry.worktree));

@@ -4,9 +4,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import * as thinkingRuntime from "../../agents/thinking-runtime.js";
 import { resolveModelFallbackOptions } from "../../auto-reply/reply/agent-runner-run-params.js";
 import { handleDirectiveOnly } from "../../auto-reply/reply/directive-handling.impl.js";
 import { parseInlineSessionDirectives } from "../../auto-reply/reply/directive-handling.parse.js";
+import * as modelRuntime from "../../auto-reply/reply/model-runtime-normalization.js";
 import {
   enqueueFollowupRun,
   scheduleFollowupDrain,
@@ -136,7 +138,14 @@ async function seedSession(thinkingLevel = "low", overrides: Partial<SessionEntr
 }
 
 async function patchSession(patch: Record<string, unknown>, config = cfg) {
-  const params = { key: sessionKey, ...patch };
+  return sessionRequest("sessions.patch", { key: sessionKey, ...patch }, config);
+}
+
+async function sessionRequest(
+  method: "sessions.patch" | "sessions.create",
+  params: Record<string, unknown>,
+  config = cfg,
+) {
   const context = {
     ...createSessionMutationTestContext(config),
     loadGatewayModelCatalogSnapshot: async () =>
@@ -148,8 +157,7 @@ async function patchSession(patch: Record<string, unknown>, config = cfg) {
     getSessionEventSubscriberConnIds: () => new Set(),
     dedupe: new Map(),
   } satisfies GatewayRequestContext;
-  const { responses, running } = startSessionMutationRequest("sessions.patch", params, {
-    req: { type: "req", id: "selection-patch", method: "sessions.patch", params },
+  const { responses, running } = startSessionMutationRequest(method, params, {
     client: null,
     context,
   });
@@ -161,6 +169,117 @@ async function patchSession(patch: Record<string, unknown>, config = cfg) {
 async function patchSuccessfully(patch: Record<string, unknown>, config = cfg) {
   expect((await patchSession(patch, config))[0]).toBe(true);
 }
+
+it.each(["explicit", "reset"] as const)(
+  "protects stored Codex context on a runtime-only %s selection",
+  (selection) =>
+    withState(async (state) => {
+      // Synthetic runtime routing only. The Gateway, session mutations, transcript
+      // worker, and SQLite reader are real; no harness or inference is started.
+      const runtime = vi
+        .spyOn(thinkingRuntime, "resolveEffectiveAgentRuntime")
+        .mockImplementation(({ sessionEntry }) => sessionEntry?.agentRuntimeOverride ?? "openclaw");
+      const prepare = vi.spyOn(modelRuntime, "prepareModelSelectionRuntime").mockResolvedValue({
+        status: "ready",
+        runtime: { kind: "set", runtime: "openclaw" },
+        catalog,
+      });
+      try {
+        await seedSession("low", { agentRuntimeOverride: "codex" });
+        const manager = await SessionManager.openAsync(
+          { ...scope, sessionId, storePath: path.join(state.sessionsDir(), "sessions.json") },
+          state.workspaceDir,
+        );
+        await manager.appendMessageAsync({ role: "user", content: "Older question", timestamp: 1 });
+        const kept = await manager.appendMessageAsync({
+          role: "user",
+          content: "Retained question",
+          timestamp: 2,
+        });
+        await manager.appendMessageAsync({
+          role: "custom",
+          customType: "openclaw.context-compaction",
+          content: "Native context compacted",
+          display: true,
+          excludeFromContext: true,
+          timestamp: 3,
+          idempotencyKey: "codex-context-compaction:thread-1:turn-1:compact-1",
+          details: {
+            kind: "context_compaction",
+            backend: "codex-app-server",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "compact-1",
+            runId: "native-run",
+          },
+          __openclaw: { runId: "native-run", itemId: "compact-1" },
+        });
+        await manager.appendMessageAsync({
+          role: "assistant",
+          provider: "openai",
+          model: "fixture",
+          api: "openai-responses",
+          content: [{ type: "text", text: "Native answer" }],
+          stopReason: "stop",
+          timestamp: 4,
+          idempotencyKey: "codex-app-server:thread-1:turn-1:assistant",
+          __openclaw: {
+            runId: "native-run",
+            runTerminal: true,
+            mirrorOrigin: "codex-app-server",
+            mirrorIdentity: "turn-1:assistant",
+          },
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+        });
+
+        const patch =
+          selection === "explicit"
+            ? { model: "fixture/x", agentRuntime: "openclaw" }
+            : { agentRuntime: null };
+        const before = loadSessionEntry(scope);
+        const [ok, , error] = await patchSession(patch);
+        expect(ok).toBe(false);
+        expect(error?.details).toEqual({
+          code: "AGENT_RUNTIME_REQUIRES_FRESH_SESSION",
+          sessionId,
+          runtimeId: "openclaw",
+          model: "fixture/x",
+        });
+        expect(loadSessionEntry(scope)).toEqual(before);
+
+        if (selection === "explicit") {
+          const [created, reply, createError] = await sessionRequest("sessions.create", {
+            agentId: "main",
+            model: "fixture/x",
+            agentRuntime: "openclaw",
+            parentSessionKey: sessionKey,
+            succeedsParent: false,
+            emitCommandHooks: true,
+          });
+          expect(created, createError?.message).toBe(true);
+          expect(reply).toMatchObject({ entry: { agentRuntimeOverride: "openclaw" } });
+          expect(reply).not.toMatchObject({ key: sessionKey });
+          expect(reply).not.toMatchObject({ runStarted: true });
+          expect(loadSessionEntry(scope)).toEqual(before);
+        }
+
+        expect(kept).toBeTruthy();
+        await manager.appendCompactionAsync("Portable summary", kept!, 200);
+        await patchSuccessfully(patch);
+        expect(loadSessionEntry(scope)?.agentRuntimeOverride).toBe(patch.agentRuntime ?? undefined);
+      } finally {
+        runtime.mockRestore();
+        prepare.mockRestore();
+      }
+    }),
+);
 
 it.each([false, true])(
   "does not write history for model selections before a message is sent (incognito: %s)",

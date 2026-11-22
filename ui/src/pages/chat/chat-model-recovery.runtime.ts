@@ -5,7 +5,10 @@ import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.t
 import { resolvePreferredServerChatModelValue } from "../../lib/chat/model-ref.ts";
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
 import { formatUiError, formatUiErrorDetails } from "../../lib/format-error.ts";
-import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
+import {
+  isAgentRuntimeFreshSessionErrorDetails,
+  isAgentRuntimeRestrictionErrorDetails,
+} from "../../lib/protocol-validators.generated/session-input.js";
 import { setChatError } from "./chat-history-state.ts";
 import {
   claimChatModelSelection,
@@ -13,6 +16,7 @@ import {
   refreshChatSessionListForTarget,
   type ChatModelSelection,
   type ChatModelSettingsHost,
+  type StartFreshWithChatModel,
 } from "./chat-session.ts";
 
 registerChatSessionEnglish();
@@ -168,14 +172,36 @@ export async function recoverChatModelSwitch(
   nextModel: string,
   runtimeSelection: string | null | undefined,
   selection: ChatModelSelection,
+  startFresh?: StartFreshWithChatModel,
 ): Promise<boolean> {
   if (!selection.ownsSelection()) {
     return false;
   }
-  const restriction =
-    error instanceof GatewayRequestError && isAgentRuntimeRestrictionErrorDetails(error.details)
-      ? error.details
-      : undefined;
+  const details = error instanceof GatewayRequestError ? error.details : undefined;
+  if (
+    isAgentRuntimeFreshSessionErrorDetails(details) &&
+    startFresh &&
+    selection.expectedSessionId === details.sessionId
+  ) {
+    const { showConfirmDialog } = await import("../../components/confirm-dialog.ts");
+    const confirmed = await showConfirmDialog({
+      compact: true,
+      title: t("chat.runtimeSwitch.title"),
+      message: t("chat.runtimeSwitch.message"),
+      confirmLabel: t("chat.runtimeSwitch.startFresh"),
+      signal: selection.owner.signal,
+      canConfirm: selection.ownsSelection,
+    });
+    // Never report success to the old picker: the old selection did not commit.
+    if (confirmed && selection.ownsSelection()) {
+      await startFresh(
+        { model: nextModel || details.model, agentRuntime: details.runtimeId },
+        { signal: selection.owner.signal, isCurrent: selection.ownsSelection },
+      );
+    }
+    return false;
+  }
+  const restriction = isAgentRuntimeRestrictionErrorDetails(details) ? details : undefined;
   if (!restriction) {
     setChatError(host, t("chat.settingErrors.model", { error: formatUiError(error) }));
     return false;

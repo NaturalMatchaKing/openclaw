@@ -13,6 +13,12 @@ const enChatSession = {
       contextWindow: "Couldn’t change the context window. Try again. {error}",
       accessProgram: "Couldn’t change the access program. Try again. {error}",
     },
+    runtimeSwitch: {
+      title: "Start fresh with this runtime?",
+      message:
+        "The selected runtime can’t continue this conversation’s native history. Start a new conversation with the selected model and runtime, or cancel to keep chatting here. This conversation stays available. /compact doesn’t export history to another runtime.",
+      startFresh: "Start fresh",
+    },
     savedConversation: "{status} · Saved conversation",
     sessionAutomation: {
       everyDuration: "Every {duration}",

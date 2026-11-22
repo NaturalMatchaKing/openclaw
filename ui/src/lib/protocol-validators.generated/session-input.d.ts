@@ -41,3 +41,6 @@ export function isSessionFileReadMetadata(
   import("../../../../packages/gateway-protocol/src/schema/sessions.js").SessionsFilesGetResult,
   "root" | "source"
 >;
+export function isAgentRuntimeFreshSessionErrorDetails(
+  value: unknown,
+): value is import("../../../../packages/gateway-protocol/src/agent-runtime-fresh-session-error-details.js").AgentRuntimeFreshSessionErrorDetails;
